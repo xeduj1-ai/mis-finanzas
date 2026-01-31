@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Control Patrimonial v8 - Fix Lista y Fecha</title>
+    <style>
+        :root { --primary: #2c3e50; --accent: #27ae60; --bnc: #0056b3; --bancaribe: #f39c12; --danger: #e74c3c; --info: #3498db; --bs: #8e44ad; }
+        body { font-family: 'Segoe UI', sans-serif; background: #eef2f3; margin: 0; padding: 20px; color: #333; }
+        .container { max-width: 1100px; margin: auto; background: white; padding: 25px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
+        #login-screen { position: fixed; top:0; left:0; width:100%; height:100%; background: var(--primary); color:white; display:flex; flex-direction:column; justify-content:center; align-items:center; z-index:1000; }
+        .total-box { font-size: 1.6em; font-weight: bold; text-align: center; background: linear-gradient(135deg, var(--primary), #4ca1af); color: white; padding: 25px; border-radius: 15px; margin-bottom: 25px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; }
+        .card { background: #fff; padding: 20px; border-radius: 12px; border: 1px solid #eee; box-shadow: 0 4px 6px rgba(0,0,0,0.02); }
+        .card h3 { margin-top: 0; border-bottom: 2px solid var(--accent); padding-bottom: 8px; }
+        input, select, button { width: 100%; padding: 12px; margin: 8px 0; border-radius: 8px; border: 1px solid #ddd; box-sizing: border-box; }
+        button { background: var(--accent); color: white; font-weight: bold; cursor: pointer; border: none; }
+        .deudor-row { background: #fdfdfd; padding: 12px; margin-bottom: 8px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; border-left: 4px solid var(--info); box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .btn-cobrar { background: var(--accent); width: auto; padding: 6px 12px; margin: 0; }
+        .calendar { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; margin-top: 15px; }
+        .day { padding: 15px; background: #f8f9fa; border-radius: 8px; text-align: center; border: 1px solid #eee; cursor: pointer; }
+        .day.has-data { background: #d4edda; border-color: var(--accent); font-weight: bold; }
+        .day.today { background: var(--primary); color: white; }
+        .day-header { font-weight: bold; text-align: center; color: #7f8c8d; }
+        .modal { display:none; position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); background:white; padding:30px; border-radius:15px; z-index:2000; width: 350px; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
+        .overlay { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:1999; }
+    </style>
+</head>
+<body>
+
+<div id="login-screen">
+    <h1>Actualizando Sistema...</h1>
+    <p>Corrigiendo sincronización de deudores y fecha...</p>
+</div>
+
+<div class="container" id="app" style="display:none;">
+    <div class="total-box" id="globalTotal">PATRIMONIO: $0.00</div>
+
+    <div class="grid">
+        <div class="card">
+            <h3>🏦 Cuentas en Dólares ($)</h3>
+            <label>Tasa BCV:</label>
+            <input type="number" id="tasa" value="37.02" step="0.01" oninput="actualizar()">
+            <label>Binance:</label>
+            <input type="number" id="binance" oninput="actualizar()">
+            <label>BNC ($):</label>
+            <input type="number" id="bnc" oninput="actualizar()">
+            <label>Bancaribe ($):</label>
+            <input type="number" id="bancaribe" oninput="actualizar()">
+            <label>Efectivo ($):</label>
+            <input type="number" id="fisico" oninput="actualizar()">
+        </div>
+
+        <div class="card">
+            <h3>🇻🇪 Bolívares y Registro</h3>
+            <label>Saldo en Bs:</label>
+            <input type="number" id="bolivares" oninput="actualizar()">
+            <hr>
+            <h3>✍️ Registrar Movimiento</h3>
+            <select id="tipoMovimiento">
+                <option value="prestamo">Prestar Dinero (Deudor)</option>
+                <option value="compra">Compra Dólares</option>
+            </select>
+            <input type="text" id="descripcionMov" placeholder="Nombre (Ej: Mario)">
+            <input type="number" id="montoMov" placeholder="Monto en $">
+            <button onclick="registrarEvento()">Guardar Movimiento</button>
+        </div>
+
+        <div class="card">
+            <h3>👥 Cuentas por Cobrar ($)</h3>
+            <div id="listaDeudores" style="max-height: 300px; overflow-y: auto;"></div>
+            <hr>
+            <div style="display: flex; justify-content: space-between;">
+                <span>Total Deudas:</span>
+                <strong id="totalDeudas" style="color: var(--danger);">$0.00</strong>
+            </div>
+        </div>
+    </div>
+
+    <div class="card" style="margin-top: 25px;">
+        <h3 style="text-align: center;">📅 Calendario - Enero 2026</h3>
+        <div class="calendar" id="calendarioGrid"></div>
+    </div>
+</div>
+
+<div class="overlay" id="overlay" onclick="cerrarModal()"></div>
+<div class="modal" id="modal">
+    <h3>Detalles del día</h3>
+    <div id="modalContent"></div>
+    <button onclick="cerrarModal()" style="margin-top:10px;">Cerrar</button>
+</div>
+
+<script>
+    let db = JSON.parse(localStorage.getItem('finanzas_v8')) || {
+        saldos: { binance: 127.46, bnc: 130, bancaribe: 215, fisico: 479, bolivares: 0, tasa: 37.02 },
+        eventos: []
+    };
+
+    // LOGIN LENTO
+    setTimeout(() => {
+        document.getElementById('login-screen').style.display = 'none';
+        document.getElementById('app').style.display = 'block';
+        inicializar();
+    }, 1500);
+
+    function inicializar() {
+        document.getElementById('tasa').value = db.saldos.tasa;
+        document.getElementById('binance').value = db.saldos.binance;
+        document.getElementById('bnc').value = db.saldos.bnc;
+        document.getElementById('bancaribe').value = db.saldos.bancaribe;
+        document.getElementById('fisico').value = db.saldos.fisico;
+        document.getElementById('bolivares').value = db.saldos.bolivares;
+        actualizar();
+        renderCalendario();
+    }
+
+    function actualizar() {
+        db.saldos.tasa = parseFloat(document.getElementById('tasa').value) || 1;
+        db.saldos.binance = parseFloat(document.getElementById('binance').value) || 0;
+        db.saldos.bnc = parseFloat(document.getElementById('bnc').value) || 0;
+        db.saldos.bancaribe = parseFloat(document.getElementById('bancaribe').value) || 0;
+        db.saldos.fisico = parseFloat(document.getElementById('fisico').value) || 0;
+        db.saldos.bolivares = parseFloat(document.getElementById('bolivares').value) || 0;
+
+        let sumaDeudores = 0;
+        let htmlDeudores = "";
+        db.eventos.forEach((e, index) => {
+            if(e.tipo === 'prestamo' && !e.cobrado) {
+                sumaDeudores += e.monto;
+                htmlDeudores += `
+                    <div class="deudor-row">
+                        <div><b>${e.desc}</b><br><small>${e.fecha}</small></div>
+                        <div style="display:flex; align-items:center; gap:8px">
+                            <span style="color:var(--danger)">$${e.monto}</span>
+                            <button class="btn-cobrar" onclick="marcarCobrado(${index})">✔</button>
+                        </div>
+                    </div>`;
+            }
+        });
+
+        document.getElementById('listaDeudores').innerHTML = htmlDeudores || "Sin deudas.";
+        document.getElementById('totalDeudas').innerText = `$${sumaDeudores.toFixed(2)}`;
+
+        const totalUsd = db.saldos.binance + db.saldos.bnc + db.saldos.bancaribe + db.saldos.fisico + sumaDeudores + (db.saldos.bolivares / db.saldos.tasa);
+        document.getElementById('globalTotal').innerHTML = `PATRIMONIO: $${totalUsd.toLocaleString('en-US', {minimumFractionDigits:2})} <br> <span style="font-size:0.7em">Bs. ${(totalUsd * db.saldos.tasa).toLocaleString('es-VE')}</span>`;
+        
+        localStorage.setItem('finanzas_v8', JSON.stringify(db));
+    }
+
+    function registrarEvento() {
+        const tipo = document.getElementById('tipoMovimiento').value;
+        const monto = parseFloat(document.getElementById('montoMov').value);
+        const desc = document.getElementById('descripcionMov').value || "S/N";
+        
+        // CORRECCIÓN DE FECHA: Forzar fecha local sin desfase
+        const hoy = new Date();
+        const fechaLocal = hoy.getFullYear() + '-' + String(hoy.getMonth() + 1).padStart(2, '0') + '-' + String(hoy.getDate()).padStart(2, '0');
+
+        if(!monto) return alert("Ingresa un monto");
+
+        if(tipo === 'prestamo') {
+            db.saldos.fisico -= monto;
+            document.getElementById('fisico').value = db.saldos.fisico;
+        } else {
+            db.saldos.fisico += monto;
+            document.getElementById('fisico').value = db.saldos.fisico;
+        }
+
+        db.eventos.push({ fecha: fechaLocal, tipo, monto, desc, cobrado: false });
+        
+        document.getElementById('montoMov').value = "";
+        document.getElementById('descripcionMov').value = "";
+        
+        actualizar();
+        renderCalendario();
+    }
+
+    function marcarCobrado(index) {
+        const item = db.eventos[index];
+        if(confirm(`¿Cobraste $${item.monto} de ${item.desc}?`)) {
+            db.eventos[index].cobrado = true;
+            db.saldos.fisico += item.monto;
+            document.getElementById('fisico').value = db.saldos.fisico;
+            actualizar();
+            renderCalendario();
+        }
+    }
+
+    function renderCalendario() {
+        const grid = document.getElementById('calendarioGrid');
+        grid.innerHTML = "";
+        ['Dom', 'Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab'].forEach(d => grid.innerHTML += `<div class="day-header">${d}</div>`);
+        const hoy = new Date();
+        const pDia = new Date(hoy.getFullYear(), hoy.getMonth(), 1).getDay();
+        const dMes = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0).getDate();
+        for(let i=0; i<pDia; i++) grid.innerHTML += `<div></div>`;
+        for(let d=1; d<=dMes; d++) {
+            const f = hoy.getFullYear() + '-' + String(hoy.getMonth() + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+            const tiene = db.eventos.some(e => e.fecha === f);
+            grid.innerHTML += `<div class="day ${d === hoy.getDate()?'today':''} ${tiene?'has-data':''}" onclick="verDetalle('${f}')">${d}</div>`;
+        }
+    }
+
+    function verDetalle(fecha) {
+        const evs = db.eventos.filter(e => e.fecha === fecha);
+        document.getElementById('modalContent').innerHTML = evs.length ? evs.map(e => `<li>${e.tipo}: $${e.monto} (${e.desc})</li>`).join('') : "Sin registros.";
+        document.getElementById('overlay').style.display = 'block';
+        document.getElementById('modal').style.display = 'block';
+    }
+    function cerrarModal() { document.getElementById('overlay').style.display = 'none'; document.getElementById('modal').style.display = 'none'; }
+</script>
+</body>
+</html>
